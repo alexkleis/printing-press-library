@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "applied_at": "2026-05-18",
+  "base_run_id": "20260517-201552",
+  "base_printing_press_version": "4.8.0",
+  "patches": [
+    {
+      "id": "transcendence-recordings-store",
+      "summary": "Added typed Recording model + recordings table + recordings_fts FTS5 index, with QueryRecordings/UpsertRecording APIs.",
+      "reason": "Backs the seven transcendence commands (lien-chain, surviving-liens, chain-of-title, owner-portfolio, case-arc, enrich, ftl-scan) that operate on a local store of clerk recordings rather than re-fetching live.",
+      "files": [
+        "internal/store/recordings.go"
+      ]
+    },
+    {
+      "id": "transcendence-commands",
+      "summary": "Seven hand-coded commands that compose the typed recordings store into property-level analytics.",
+      "reason": "Public records portals expose only raw search; the underwriter workflow needs lien-chain reconstruction, FL-statute-aware surviving-liens, chain-of-title, owner-portfolio rollup, case-arc, batch enrich, and FTL scans.",
+      "files": [
+        "internal/cli/lien_chain.go",
+        "internal/cli/surviving_liens.go",
+        "internal/cli/chain_of_title.go",
+        "internal/cli/owner_portfolio.go",
+        "internal/cli/case_arc.go",
+        "internal/cli/enrich.go",
+        "internal/cli/ftl_scan.go",
+        "internal/cli/recordings_shared.go"
+      ]
+    },
+    {
+      "id": "recaptcha-headless-chromium",
+      "summary": "Headless-Chromium reCAPTCHA Enterprise v3 token helper (chromedp) wired into the two reCAPTCHA-protected search endpoints via PostSearchWithRecaptcha.",
+      "reason": "The clerk portal protects /api/home/standardsearch and /api/home/propertysearch with reCAPTCHA Enterprise v3. Tokens are single-use and must originate from the portal's site key — we mint one per call by injecting recaptcha/api.js into a fresh chromedp tab and awaiting grecaptcha.execute.",
+      "files": [
+        "internal/client/recaptcha.go",
+        "internal/client/client.go",
+        "internal/cli/promoted_search-property.go",
+        "internal/cli/promoted_search-name.go"
+      ],
+      "validated_outcome": "search-property --address-no-unit '5600 W 13 AVE' returns 14 deed records end-to-end in ~3s (golden recon case)."
+    },
+    {
+      "id": "auth-login-verify-shortcircuit",
+      "summary": "auth login --chrome RunE short-circuits under cliutil.IsVerifyEnv() / --dry-run.",
+      "reason": "validate-narrative and verify harnesses run on machines that have not logged in to the portal in Chrome. Without the short-circuit, full-examples checks fail spuriously on cookie extraction.",
+      "files": [
+        "internal/cli/auth.go"
+      ]
+    },
+    {
+      "id": "surviving-liens-conservative-release-pairing",
+      "summary": "findMatchingRelease requires both first AND second party identity (case-insensitive) and consumes each release at most once.",
+      "reason": "Two liens sharing only a first-party name (common for repeat borrowers) could both be marked released by a single satisfaction. FL Statute 197.522 / 45.0315 bidder-disclosure rules favor 'still open in doubt'. Comparisons are case-insensitive (strings.EqualFold) because clerk recordings alternate between 'JOHN DOE' and 'John Doe' for the same party across instruments — case-sensitive matching would keep a satisfied lien in the surviving output and inflate totals_cents. Covered by surviving_liens_test.go.",
+      "files": [
+        "internal/cli/surviving_liens.go",
+        "internal/cli/surviving_liens_test.go",
+        "internal/cli/enrich.go"
+      ]
+    },
+    {
+      "id": "enrich-context-propagation",
+      "summary": "enrichParallel honors ctx cancellation between submissions and inside workers; cancelled folios surface error=<ctx.Err()> in their JSONL row.",
+      "reason": "Without this, SIGINT mid-batch leaves the wait group draining unbounded work after the user gives up.",
+      "files": [
+        "internal/cli/enrich.go"
+      ]
+    },
+    {
+      "id": "auth-pycookiecheat-json-encoded-args",
+      "summary": "Domain + cookie path are JSON-encoded before interpolation into the Python -c script.",
+      "reason": "Profile directory names and cookie paths flow from user input + filesystem state; embedding them raw in a Python string literal would let a profile containing a backslash, quote, or newline break the inline script.",
+      "files": [
+        "internal/cli/auth.go"
+      ]
+    },
+    {
+      "id": "auth-sqlite-cookie-probe-escape",
+      "summary": "countCookiesForDomain escapes single quotes in the LIKE pattern before interpolating into the sqlite3 SELECT.",
+      "reason": "The pattern is built from the target domain. Today that's a hardcoded value, but treating every SQL fragment as untrusted keeps the invariant local — future refactors that pass user input into `domain` won't silently open an injection.",
+      "files": [
+        "internal/cli/auth.go"
+      ]
+    },
+    {
+      "id": "recordings-fts-warning-stderr",
+      "summary": "FTS index update warning goes to stderr instead of stdout.",
+      "reason": "sync --json emits JSONL on stdout; a bare warning line on stdout would corrupt the event stream for downstream parsers.",
+      "files": [
+        "internal/store/recordings.go"
+      ]
+    },
+    {
+      "id": "normalize-folio-strict",
+      "summary": "NormalizeFolio uses strconv.ParseInt instead of fmt.Sscanf so embedded non-digit characters return 0.",
+      "reason": "Sscanf accepts a partial digit prefix (e.g. '30-2232-066A-1610' → 302232066), defeating the `if folioN == 0` guard in every transcendence command. In ftl-scan a typo in a watchlist CSV would silently exclude a property — exactly the failure mode the tool is built to prevent. Covered by recordings_shared_test.go.",
+      "files": [
+        "internal/cli/recordings_shared.go",
+        "internal/cli/recordings_shared_test.go"
+      ]
+    },
+    {
+      "id": "case-arc-lis-no-op-documented",
+      "summary": "classifyCaseStatus' LIS branch is explicitly a documented no-op.",
+      "reason": "Greptile flagged the prior `if status == \"open\" { status = \"open\" }` as a dead self-assign. Removed the no-op but kept the case label so the switch documents that LIS doesn't transition status (avoids a future reviewer wondering whether LIS was forgotten).",
+      "files": [
+        "internal/cli/case_arc.go"
+      ]
+    },
+    {
+      "id": "case-arc-satisfied-uses-sju",
+      "summary": "classifyCaseStatus marks a JUD case as 'satisfied' on SJU (Satisfaction of Judgment), not SAT (Satisfaction of Mortgage).",
+      "reason": "SAT closes a mortgage instrument; SJU closes a judgment. Using SAT would never fire on cases actually resolved via the court clerk's Satisfaction of Judgment recording — the exact transition case-arc is built to surface. surviving_liens.releaseMap already pairs JUD→SJU; case-arc now matches. Covered by case_arc_test.go.",
+      "files": [
+        "internal/cli/case_arc.go",
+        "internal/cli/case_arc_test.go"
+      ]
+    },
+    {
+      "id": "recording-filter-orderby-allowlist",
+      "summary": "RecordingFilter.OrderBy is validated against allowedOrderByClauses; non-listed values fall back to the default order.",
+      "reason": "The field is interpolated into the SQL string. Today every caller passes a hardcoded literal, but the safety contract was only documented in a comment. The allow-list makes the contract enforced — future callers can't accidentally thread user input through this field. The set covers every literal in use today; adding a new clause is a deliberate edit.",
+      "files": [
+        "internal/store/recordings.go"
+      ]
+    },
+    {
+      "id": "recordings-coerce-helpers-strict",
+      "summary": "i64/f64 string branches use strconv.ParseInt/ParseFloat (strict) instead of fmt.Sscanf (partial-prefix tolerant); ConsiderationCents rounds instead of truncating.",
+      "reason": "Sscanf parses '123A' as 123 — the same silent-prefix bug fixed in NormalizeFolio. Consistency matters across every numeric ingest path. The dollars→cents conversion previously truncated; math.Round avoids a one-cent error on fractional consideration amounts that round-tripped through .NET-emitted floats.",
+      "files": [
+        "internal/store/recordings.go"
+      ]
+    },
+    {
+      "id": "since-flag-validation",
+      "summary": "ftl-scan, lien-chain, and chain-of-title validate --since as YYYY-MM-DD via validateSinceFlag before threading it into the SQLite filter.",
+      "reason": "SinceDate is interpolated into a textual `recording_date >= ?` comparison. A common user mistake like '01/01/2025' would parse as a different ordering than '2025-01-01' and silently match no rows, defeating the filter without warning. ftl-scan in particular exists to surface deal-breaker FTLs — a malformed --since must be a loud error, not a quiet skip. Shared validateSinceFlag handles the parse + canonicalization and is covered by recordings_shared_test.go.",
+      "files": [
+        "internal/cli/recordings_shared.go",
+        "internal/cli/recordings_shared_test.go",
+        "internal/cli/ftl_scan.go",
+        "internal/cli/lien_chain.go",
+        "internal/cli/chain_of_title.go"
+      ]
+    }
+  ]
+}
